@@ -1,5 +1,7 @@
+import com.sun.net.httpserver.Headers
 import java.io.BufferedReader
 import java.io.InputStream
+import java.io.OutputStream
 import java.io.StringReader
 import java.net.ServerSocket
 import java.net.Socket
@@ -45,6 +47,74 @@ fun handleConnection(client: Socket) {
     val data = String(headerBytes, charset = StandardCharsets.UTF_8)
     val parsedRequest = parseHeaders(data)
 
+
+    val (host, port, newPath) = getHostPort(parsedRequest.path)
+    parsedRequest.path = newPath
+
+    if (parsedRequest.method == "CONNECT") {
+        println(host)
+        connectRequest(clientInput, clientOutput, host, port, client)
+        return
+    } else {
+        println(host)
+        val targetSocket = Socket(host, port)
+        val targetInput = targetSocket.getInputStream()
+        val targetOutput = targetSocket.getOutputStream()
+
+        val newRequestHeader = reconstructHeadersToBytes(parsedRequest)
+        targetOutput.write(newRequestHeader)
+
+        if (remainingBytes.isNotEmpty()) {
+            targetOutput.write(remainingBytes)
+        }
+
+        val giveOutput = thread {
+            pipe(clientInput, targetOutput)
+        }
+
+        val readInput = thread {
+            pipe(targetInput, clientOutput)
+        }
+
+        giveOutput.join()
+        readInput.join()
+
+        targetSocket.close()
+        client.close()
+    }
+
+}
+
+fun connectRequest(input: InputStream, output: OutputStream, host: String, port: Int, socket: Socket) {
+    val targetSocket = Socket(host, port)
+    val targetInput = targetSocket.getInputStream()
+    val targetOutput = targetSocket.getOutputStream()
+
+    output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(charset = Charsets.UTF_8))
+    output.flush()
+
+    val giveOutput = thread {
+        pipe(input, targetOutput)
+    }
+
+    val readInput = thread {
+        pipe(targetInput, output)
+    }
+
+    readInput.join()
+    giveOutput.join()
+
+    targetSocket.close()
+    socket.close()
+}
+
+fun pipe(input: InputStream, output: OutputStream) {
+    val buffer = ByteArray(8192)
+    var bytesRead = input.read(buffer)
+    while (bytesRead != -1) {
+        output.write(buffer, 0, bytesRead)
+        bytesRead = input.read(buffer)
+    }
 }
 
 fun readAllBytes(stream: InputStream, buffer: ByteArray): Pair<ByteArray, ByteArray> {
@@ -100,4 +170,81 @@ fun parseHeaders(request: String): Request {
         currentLine = reader.readLine()
     }
     return Request(method, headers, path, protocol)
+}
+
+fun getHostPort(destination: String): Triple<String, Int, String> {
+    var port: Int
+    var host: String
+    var newPath: String
+
+    if (destination.startsWith("https")) {
+        val data = destination.replace("https://", "").split("/", limit = 2)
+        val hostPort = data[0]
+
+        if (data.size == 1) {
+            newPath = "/"
+        } else {
+            newPath = "/" + data.lastOrNull()
+        }
+
+        val splitHostPort = hostPort.split(':', limit = 2)
+
+        host = splitHostPort[0]
+
+        if (splitHostPort.size == 1) {
+            port = 443
+        } else {
+            port = splitHostPort[1].toInt()
+        }
+
+
+    } else if (destination.startsWith("http")) {
+        val data = destination.replace("http://", "").split("/", limit = 2)
+        val hostPort = data[0]
+
+        if (data.size == 1) {
+            newPath = "/"
+        } else {
+            newPath = "/" + data.lastOrNull()
+        }
+
+        val splitHostPort = hostPort.split(':', limit = 2)
+
+        host = splitHostPort[0]
+
+        if (splitHostPort.size == 1) {
+            port = 80
+        } else {
+            port = splitHostPort[1].toInt()
+        }
+    } else {
+        val data = destination.split("/", limit = 2)
+        val hostPort = data[0]
+
+        if (data.size == 1) {
+            newPath = "/"
+        } else {
+            newPath = "/" + data.lastOrNull()
+        }
+
+        val splitHostPort = hostPort.split(':', limit = 2)
+
+        host = splitHostPort[0]
+
+        if (splitHostPort.size == 1) {
+            port = 80
+        } else {
+            port = splitHostPort[1].toInt()
+        }
+    }
+    return Triple(host, port, newPath)
+}
+
+fun reconstructHeadersToBytes(request: Request): ByteArray {
+    var headerString = request.method + " " + request.path + " " + request.protocol + "\r\n"
+    for (header in request.headers) {
+        headerString += header.key + ": " + header.value + "\r\n"
+    }
+    headerString += "\r\n"
+    return headerString.toByteArray(charset = Charsets.UTF_8)
 }
