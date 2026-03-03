@@ -1,12 +1,16 @@
-import com.sun.net.httpserver.Headers
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.StringReader
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.nio.charset.StandardCharsets
+import kotlin.concurrent.atomics.AtomicBoolean
+import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
+import kotlin.time.Clock
 
 fun main(args: Array<String>) {
     val host = "0.0.0.0"
@@ -52,14 +56,13 @@ fun handleConnection(client: Socket) {
     parsedRequest.path = newPath
 
     if (parsedRequest.method == "CONNECT") {
-        println(host)
         connectRequest(clientInput, clientOutput, host, port, client)
         return
     } else {
-        println(host)
         val targetSocket = Socket(host, port)
         val targetInput = targetSocket.getInputStream()
         val targetOutput = targetSocket.getOutputStream()
+        println("${parsedRequest.method} ${host}:${port} -> HTTP/1.1 200 Request Forwarded")
 
         val newRequestHeader = reconstructHeadersToBytes(parsedRequest)
         targetOutput.write(newRequestHeader)
@@ -69,11 +72,15 @@ fun handleConnection(client: Socket) {
         }
 
         val giveOutput = thread {
+            println("give output start")
             pipe(clientInput, targetOutput)
+            println("give output end")
         }
 
         val readInput = thread {
+            println("read input start")
             pipe(targetInput, clientOutput)
+            println("read input end")
         }
 
         giveOutput.join()
@@ -85,6 +92,7 @@ fun handleConnection(client: Socket) {
 
 }
 
+@OptIn(ExperimentalAtomicApi::class)
 fun connectRequest(input: InputStream, output: OutputStream, host: String, port: Int, socket: Socket) {
     val targetSocket = Socket(host, port)
     val targetInput = targetSocket.getInputStream()
@@ -93,27 +101,45 @@ fun connectRequest(input: InputStream, output: OutputStream, host: String, port:
     output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(charset = Charsets.UTF_8))
     output.flush()
 
+    val time = Clock.System.now()
+    println("[${time}] CONNECT ${host}:${port} ${socket.remoteSocketAddress} -> HTTP/1.1 200 Connection Established")
+
+    val runningFlag = AtomicBoolean(true)
+
     val giveOutput = thread {
         pipe(input, targetOutput)
+        if (runningFlag.compareAndSet(expectedValue = true, newValue = false)) {
+            targetSocket.close()
+            socket.close()
+        }
+
     }
 
     val readInput = thread {
         pipe(targetInput, output)
+        if (runningFlag.compareAndSet(expectedValue = true, newValue = false)) {
+            targetSocket.close()
+            socket.close()
+        }
     }
 
     readInput.join()
     giveOutput.join()
 
-    targetSocket.close()
-    socket.close()
 }
 
 fun pipe(input: InputStream, output: OutputStream) {
     val buffer = ByteArray(8192)
-    var bytesRead = input.read(buffer)
-    while (bytesRead != -1) {
-        output.write(buffer, 0, bytesRead)
-        bytesRead = input.read(buffer)
+    try {
+        var bytesRead = input.read(buffer)
+        while (bytesRead != -1) {
+            output.write(buffer, 0, bytesRead)
+            bytesRead = input.read(buffer)
+        }
+    } catch (e: SocketException) {
+        return
+    } catch (e: IOException) {
+        println("Unexpected error ${e}")
     }
 }
 
