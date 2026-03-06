@@ -7,30 +7,54 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ArrayBlockingQueue
 import kotlin.concurrent.atomics.AtomicBoolean
 import kotlin.concurrent.atomics.ExperimentalAtomicApi
 import kotlin.concurrent.thread
 import kotlin.time.Clock
 
+val cores = Runtime.getRuntime().availableProcessors()
+val connectionQueue = ArrayBlockingQueue<Socket>(2000, true)
+
 fun main(args: Array<String>) {
-    val host = "0.0.0.0"
-    var port = args.find { arg : String -> arg === "PORT" }?.get(0)?.digitToIntOrNull()
+    val workers = cores * 4
+
+    var port = args.find { arg : String -> arg.equals("PORT") }?.get(0)?.digitToIntOrNull()
     if (port == null) {
         println("No port specified starting on port 3000")
         port = 3000
     }
-    println("Listening on port: ${port}")
+    println("Listening on port: $port")
 
     val socket = ServerSocket(port)
 
-    var running = true
+    for (i in 0 until workers) {
+        thread {
+            workerHandler()
+        }
+    }
 
+    val running = true
     while (running) {
         val client = socket.accept()
-        thread {
-            handleConnection(client)
-        }
+        connectionQueue.put(client)
 
+    }
+}
+
+fun workerHandler() {
+    try {
+        while (true) {
+            try {
+                val socket = connectionQueue.take()
+                handleConnection(socket)
+            } catch (e: Error) {
+                println(e)
+                continue
+            }
+        }
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
     }
 }
 
@@ -71,28 +95,11 @@ fun handleConnection(client: Socket) {
             targetOutput.write(remainingBytes)
         }
 
-        val giveOutput = thread {
-            println("give output start")
-            pipe(clientInput, targetOutput)
-            println("give output end")
-        }
-
-        val readInput = thread {
-            println("read input start")
-            pipe(targetInput, clientOutput)
-            println("read input end")
-        }
-
-        giveOutput.join()
-        readInput.join()
-
-        targetSocket.close()
-        client.close()
+        managePipes(targetInput, targetOutput, clientInput, clientOutput, client, targetSocket)
     }
 
 }
 
-@OptIn(ExperimentalAtomicApi::class)
 fun connectRequest(input: InputStream, output: OutputStream, host: String, port: Int, socket: Socket) {
     val targetSocket = Socket(host, port)
     val targetInput = targetSocket.getInputStream()
@@ -104,28 +111,39 @@ fun connectRequest(input: InputStream, output: OutputStream, host: String, port:
     val time = Clock.System.now()
     println("[${time}] CONNECT ${host}:${port} ${socket.remoteSocketAddress} -> HTTP/1.1 200 Connection Established")
 
+    managePipes(targetInput, targetOutput, input, output, socket, targetSocket)
+
+}
+
+@OptIn(ExperimentalAtomicApi::class)
+fun managePipes(
+    targetInputStream: InputStream,
+    targetOutputStream: OutputStream,
+    clientInputStream: InputStream,
+    clienOutputStream: OutputStream,
+    client: Socket,
+    target: Socket
+) {
     val runningFlag = AtomicBoolean(true)
 
     val giveOutput = thread {
-        pipe(input, targetOutput)
+        pipe(clientInputStream, targetOutputStream)
         if (runningFlag.compareAndSet(expectedValue = true, newValue = false)) {
-            targetSocket.close()
-            socket.close()
+            target.close()
+            client.close()
         }
-
     }
 
     val readInput = thread {
-        pipe(targetInput, output)
+        pipe(targetInputStream, clienOutputStream)
         if (runningFlag.compareAndSet(expectedValue = true, newValue = false)) {
-            targetSocket.close()
-            socket.close()
+            target.close()
+            client.close()
         }
     }
 
     readInput.join()
     giveOutput.join()
-
 }
 
 fun pipe(input: InputStream, output: OutputStream) {
