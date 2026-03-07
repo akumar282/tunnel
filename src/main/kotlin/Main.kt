@@ -1,4 +1,5 @@
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -53,13 +54,13 @@ fun workerHandler() {
                 continue
             }
         }
-    } catch (e: InterruptedException) {
+    } catch (_: InterruptedException) {
         Thread.currentThread().interrupt()
     }
 }
 
 fun handleConnection(client: Socket) {
-    var buffer = ByteArray(8192)
+    val buffer = ByteArray(8192)
 
     val clientInput = client.getInputStream()
     val clientOutput = client.getOutputStream()
@@ -154,32 +155,37 @@ fun pipe(input: InputStream, output: OutputStream) {
             output.write(buffer, 0, bytesRead)
             bytesRead = input.read(buffer)
         }
-    } catch (e: SocketException) {
+    } catch (_: SocketException) {
         return
     } catch (e: IOException) {
-        println("Unexpected error ${e}")
+        println("Unexpected error $e")
     }
 }
 
 fun readAllBytes(stream: InputStream, buffer: ByteArray): Pair<ByteArray, ByteArray> {
-    var accumulator = byteArrayOf()
+    val accumulator = ByteArrayOutputStream()
 
     var bytesRead = stream.read(buffer)
+    var prevSize: Int = accumulator.size()
     while (bytesRead != -1) {
-        accumulator += buffer.sliceArray(0..bytesRead - 1)
-        val endIndex = getHeaderEnd(accumulator)
+        accumulator.write(buffer, 0, bytesRead)
+        val currentSize = accumulator.size()
+        val searchStart = 0.coerceAtLeast(prevSize - 3)
+        val currByteArray = accumulator.toByteArray()
+        val endIndex = getHeaderEnd(currByteArray, currentSize, searchStart)
+        prevSize = currentSize
         if (endIndex != -1) {
-            val headerBytes = accumulator.copyOfRange(0, endIndex)
-            val remainingBytes = accumulator.copyOfRange(endIndex, accumulator.size)
+            val headerBytes = currByteArray.copyOfRange(0, endIndex)
+            val remainingBytes = currByteArray.copyOfRange(endIndex, currByteArray.size)
             return Pair(headerBytes, remainingBytes)
         }
         bytesRead = stream.read(buffer)
     }
-    return Pair(accumulator, accumulator)
+    return Pair(accumulator.toByteArray(), accumulator.toByteArray())
 }
 
-fun getHeaderEnd(bytes: ByteArray): Int {
-    for (i in 0..bytes.lastIndex - 3) {
+fun getHeaderEnd(bytes: ByteArray, searchEnd: Int, searchStart: Int): Int {
+    for (i in searchStart until searchEnd - 3) {
         if (
             bytes[i].toInt() == 0x0D &&
             bytes[i + 1].toInt() == 0x0A &&
@@ -202,7 +208,7 @@ fun parseHeaders(request: String): Request {
     }
     val (method, path, protocol) = requestLineParts
 
-    var lastLine: String? = null
+    var lastLine: String?
     var currentLine = reader.readLine()
     val headers = mutableMapOf<String , String>()
 
