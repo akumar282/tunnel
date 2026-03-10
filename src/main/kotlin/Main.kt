@@ -96,7 +96,14 @@ fun handleConnection(client: Socket) {
             targetOutput.write(remainingBytes)
         }
 
-        managePipes(targetInput, targetOutput, clientInput, clientOutput, client, targetSocket)
+        managePipes(
+            targetInput,
+            targetOutput,
+            clientInput,
+            clientOutput,
+            client,
+            targetSocket
+        )
     }
 
 }
@@ -112,7 +119,14 @@ fun connectRequest(input: InputStream, output: OutputStream, host: String, port:
     val time = Clock.System.now()
     println("[${time}] CONNECT ${host}:${port} ${socket.remoteSocketAddress} -> HTTP/1.1 200 Connection Established")
 
-    managePipes(targetInput, targetOutput, input, output, socket, targetSocket)
+    managePipes(
+        targetInput,
+        targetOutput,
+        input,
+        output,
+        socket,
+        targetSocket
+    )
 
 }
 
@@ -228,64 +242,23 @@ fun getHostPort(destination: String): Triple<String, Int, String> {
     var newPath: String
 
     if (destination.startsWith("https")) {
-        val data = destination.replace("https://", "").split("/", limit = 2)
-        val hostPort = data[0]
-
-        if (data.size == 1) {
-            newPath = "/"
-        } else {
-            newPath = "/" + data.lastOrNull()
-        }
-
-        val splitHostPort = hostPort.split(':', limit = 2)
-
-        host = splitHostPort[0]
-
-        if (splitHostPort.size == 1) {
-            port = 443
-        } else {
-            port = splitHostPort[1].toInt()
-        }
-
+        val result = assignPathAndPort(destination, "https://", 443)
+        port = result.first
+        newPath = result.second
+        host = result.third
 
     } else if (destination.startsWith("http")) {
-        val data = destination.replace("http://", "").split("/", limit = 2)
-        val hostPort = data[0]
+        val result = assignPathAndPort(destination, "http://", 80)
+        port = result.first
+        newPath = result.second
+        host = result.third
 
-        if (data.size == 1) {
-            newPath = "/"
-        } else {
-            newPath = "/" + data.lastOrNull()
-        }
-
-        val splitHostPort = hostPort.split(':', limit = 2)
-
-        host = splitHostPort[0]
-
-        if (splitHostPort.size == 1) {
-            port = 80
-        } else {
-            port = splitHostPort[1].toInt()
-        }
     } else {
-        val data = destination.split("/", limit = 2)
-        val hostPort = data[0]
+        val result = assignPathAndPort(destination, "/", 80)
+        port = result.first
+        newPath = result.second
+        host = result.third
 
-        if (data.size == 1) {
-            newPath = "/"
-        } else {
-            newPath = "/" + data.lastOrNull()
-        }
-
-        val splitHostPort = hostPort.split(':', limit = 2)
-
-        host = splitHostPort[0]
-
-        if (splitHostPort.size == 1) {
-            port = 80
-        } else {
-            port = splitHostPort[1].toInt()
-        }
     }
     return Triple(host, port, newPath)
 }
@@ -297,4 +270,29 @@ fun reconstructHeadersToBytes(request: Request): ByteArray {
     }
     headerString += "\r\n"
     return headerString.toByteArray(charset = Charsets.UTF_8)
+}
+
+fun assignPathAndPort(destination: String, remove: String, fallbackPort: Int): Triple<Int, String, String> {
+    val data = destination.split(remove, limit = 2)
+    val hostPort = data[0]
+    val port: Int
+    val newPath: String
+    val host: String
+
+    if (data.size == 1) {
+        newPath = "/"
+    } else {
+        newPath = "/" + data.lastOrNull()
+    }
+
+    val splitHostPort = hostPort.split(':', limit = 2)
+
+    host = splitHostPort[0]
+
+    if (splitHostPort.size == 1) {
+        port = fallbackPort
+    } else {
+        port = splitHostPort[1].toInt()
+    }
+    return Triple(port, newPath, host)
 }
