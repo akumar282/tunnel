@@ -16,15 +16,23 @@ import kotlin.time.Clock
 
 val cores = Runtime.getRuntime().availableProcessors()
 val connectionQueue = ArrayBlockingQueue<Socket>(2000, true)
+val DEFAULT_PORT = 3000
 
 fun main(args: Array<String>) {
     val workers = cores * 4
 
-    var port = args.find { arg : String -> arg.equals("PORT") }?.get(0)?.digitToIntOrNull()
-    if (port == null) {
-        println("No port specified starting on port 3000")
-        port = 3000
+    var port = DEFAULT_PORT
+
+    for (arg in args) {
+        if (arg.startsWith("--port=")) {
+            port = arg.split('=')[1].toInt()
+        }
     }
+
+    if (port == DEFAULT_PORT) {
+        println("No port specified starting on port 3000")
+    }
+
     println("Listening on port: $port")
 
     val socket = ServerSocket(port)
@@ -68,7 +76,8 @@ fun handleConnection(client: Socket) {
     val ( headerBytes, remainingBytes ) = readAllBytes(clientInput, buffer)
 
     if (headerBytes.isEmpty()) {
-        println("Error Reading Headers")
+        val time = Clock.System.now()
+        println("[${time}] ${client.remoteSocketAddress}:${client.port} -> HTTP/1.1 200 Empty Connection")
         client.close()
         return
     }
