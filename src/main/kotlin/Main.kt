@@ -7,6 +7,7 @@ import java.io.StringReader
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ArrayBlockingQueue
 import kotlin.concurrent.atomics.AtomicBoolean
@@ -90,7 +91,13 @@ fun handleConnection(client: Socket) {
     parsedRequest.path = newPath
 
     if (parsedRequest.method == "CONNECT") {
-        connectRequest(clientInput, clientOutput, host, port, client)
+        try {
+            connectRequest(clientInput, clientOutput, host, port, client)
+        } catch (e: UnknownHostException) {
+            println("Invalid host: $host")
+            client.close()
+            return
+        }
         return
     } else {
         val targetSocket = Socket(host, port)
