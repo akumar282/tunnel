@@ -102,6 +102,7 @@ fun handleConnection(client: Socket) {
 
         if (method == "CONNECT") {
             val (host, port) = parseConnectTarget(path)
+            discardConnectHeaders(clientInput)
 
             connectRequest(clientInput, clientOutput, host, port, client)
             return
@@ -295,6 +296,24 @@ fun parseConnectTarget(target: String): Pair<String, Int> {
     val host = parts[0]
     val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 443 else 443
     return Pair(host, port)
+}
+
+fun discardConnectHeaders(stream: InputStream) {
+    var state = 0
+    while (true) {
+        val curr = stream.read()
+        if (curr == -1) {
+            return
+        }
+
+        state = when (state) {
+            0 -> if (curr == '\r'.code) 1 else 0
+            1 -> if (curr == '\n'.code) 2 else 0
+            2 -> if (curr == '\r'.code) 3 else 0
+            3 -> if (curr == '\n'.code) return else 0
+            else -> 0
+        }
+    }
 }
 
 fun getHostPort(destination: String): Triple<String, Int, String> {
