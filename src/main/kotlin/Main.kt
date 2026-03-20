@@ -74,35 +74,54 @@ fun handleConnection(client: Socket) {
     val clientInput = client.getInputStream()
     val clientOutput = client.getOutputStream()
 
-    val ( headerBytes, remainingBytes ) = readAllBytes(clientInput, buffer)
-
-    if (headerBytes.isEmpty()) {
-        val time = Clock.System.now()
-        println("[${time}] ${client.remoteSocketAddress}:${client.port} -> HTTP/1.1 200 Empty Connection")
-        client.close()
-        return
-    }
-
-    val data = String(headerBytes, charset = StandardCharsets.UTF_8)
-    val parsedRequest = parseHeaders(data)
-
-
-    val (host, port, newPath) = getHostPort(parsedRequest.path)
-    parsedRequest.path = newPath
-
-    if (parsedRequest.method == "CONNECT") {
-        try {
-            connectRequest(clientInput, clientOutput, host, port, client)
-        } catch (e: UnknownHostException) {
-            println("Invalid host: $host")
+    try {
+        val requestLine = readRequestLine(clientInput)
+        if (requestLine.isNullOrBlank()) {
             client.close()
             return
         }
-        return
-    } else {
+
+        val validMethods = setOf("GET", "POST", "CONNECT", "HEAD", "PUT", "DELETE")
+
+        val isValid = validMethods.any { requestLine.startsWith(it) }
+
+        if (!isValid) {
+            client.close()
+            return
+        }
+
+        val parts = requestLine.trim().split(" ")
+        if (parts.size < 3) {
+            client.close()
+            return
+        }
+
+        val method = parts[0]
+        val path = parts[1]
+        val protocol = parts[2]
+
+        if (method == "CONNECT") {
+            val (host, port) = parseConnectTarget(path)
+
+            connectRequest(clientInput, clientOutput, host, port, client)
+            return
+        }
+
+        val (headerBytes, remainingBytes) = readAllBytes(clientInput, buffer)
+
+        val fullRequest = requestLine + "\r\n" + String(headerBytes, Charsets.UTF_8)
+        val parsedRequest = parseHeaders(fullRequest)
+
+        val (host, port, newPath) = getHostPort(parsedRequest.path)
+        parsedRequest.path = newPath
+
         val targetSocket = Socket(host, port)
+        targetSocket.soTimeout = 15000
+        client.soTimeout = 15000
+
         val targetInput = targetSocket.getInputStream()
         val targetOutput = targetSocket.getOutputStream()
+
         println("${parsedRequest.method} ${host}:${port} -> HTTP/1.1 200 Request Forwarded")
 
         val newRequestHeader = reconstructHeadersToBytes(parsedRequest)
@@ -120,8 +139,11 @@ fun handleConnection(client: Socket) {
             client,
             targetSocket
         )
-    }
 
+    } catch (e: Exception) {
+        println("Connection error: $e")
+        client.close()
+    }
 }
 
 fun connectRequest(input: InputStream, output: OutputStream, host: String, port: Int, socket: Socket) {
@@ -250,6 +272,29 @@ fun parseHeaders(request: String): Request {
         currentLine = reader.readLine()
     }
     return Request(method, headers, path, protocol)
+}
+
+fun readRequestLine(stream: InputStream): String? {
+    val sb = StringBuilder()
+    var prev = -1
+    while (true) {
+        val curr = stream.read()
+        if (curr == -1) return null
+
+        sb.append(curr.toChar())
+
+        if (prev == '\r'.code && curr == '\n'.code) {
+            return sb.toString().trim()
+        }
+        prev = curr
+    }
+}
+
+fun parseConnectTarget(target: String): Pair<String, Int> {
+    val parts = target.split(":", limit = 2)
+    val host = parts[0]
+    val port = if (parts.size > 1) parts[1].toIntOrNull() ?: 443 else 443
+    return Pair(host, port)
 }
 
 fun getHostPort(destination: String): Triple<String, Int, String> {
