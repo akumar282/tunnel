@@ -110,11 +110,17 @@ fun handleConnection(client: Socket) {
 
         val (headerBytes, remainingBytes) = readAllBytes(clientInput, buffer)
 
-        val fullRequest = requestLine + "\r\n" + String(headerBytes, Charsets.UTF_8)
-        val parsedRequest = parseHeaders(fullRequest)
+        val data = requestLine + "\r\n" + String(headerBytes, charset = StandardCharsets.UTF_8)
+        val parsedRequest = parseHeaders(data)
 
         val (host, port, newPath) = getHostPort(parsedRequest.path)
         parsedRequest.path = newPath
+
+        println(host)
+        println(port)
+        println(newPath)
+
+
 
         val targetSocket = Socket(host, port)
         targetSocket.soTimeout = 15000
@@ -322,19 +328,21 @@ fun getHostPort(destination: String): Triple<String, Int, String> {
     var newPath: String
 
     if (destination.startsWith("https")) {
-        val result = assignPathAndPort(destination, "https://", 443)
+        val hostAndPath = destination.split("https://", limit = 2)[1]
+        val result = assignPathAndPort(hostAndPath, 443)
         port = result.first
         newPath = result.second
         host = result.third
 
     } else if (destination.startsWith("http")) {
-        val result = assignPathAndPort(destination, "http://", 80)
+        val hostAndPath = destination.split("http://", limit = 2)[1]
+        val result = assignPathAndPort(hostAndPath, 80)
         port = result.first
         newPath = result.second
         host = result.third
 
     } else {
-        val result = assignPathAndPort(destination, "/", 80)
+        val result = assignPathAndPort(destination, 80)
         port = result.first
         newPath = result.second
         host = result.third
@@ -352,8 +360,8 @@ fun reconstructHeadersToBytes(request: Request): ByteArray {
     return headerString.toByteArray(charset = Charsets.UTF_8)
 }
 
-fun assignPathAndPort(destination: String, remove: String, fallbackPort: Int): Triple<Int, String, String> {
-    val data = destination.split(remove, limit = 2)
+fun assignPathAndPort(destination: String, fallbackPort: Int): Triple<Int, String, String> {
+    val data = destination.split("/", limit = 2)
     val hostPort = data[0]
     val port: Int
     val newPath: String
