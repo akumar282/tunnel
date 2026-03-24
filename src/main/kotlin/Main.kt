@@ -18,6 +18,8 @@ import kotlin.time.Clock
 val cores = Runtime.getRuntime().availableProcessors()
 val connectionQueue = ArrayBlockingQueue<Socket>(2000, true)
 val DEFAULT_PORT = 3000
+var auth = false
+var authToken: String? = null
 
 fun main(args: Array<String>) {
     val workers = cores * 4
@@ -27,6 +29,12 @@ fun main(args: Array<String>) {
     for (arg in args) {
         if (arg.startsWith("--port=")) {
             port = arg.split('=')[1].toInt()
+        }
+        if (arg.startsWith("--auth=")) {
+            auth = arg.split('=')[1].toBoolean()
+        }
+        if (arg.startsWith("--authToken=")) {
+            authToken = arg.split('=')[1].toString()
         }
     }
 
@@ -101,25 +109,46 @@ fun handleConnection(client: Socket) {
         val protocol = parts[2]
 
         if (method == "CONNECT") {
+            val (headerBytes, remainingBytes) = readAllBytes(clientInput, buffer)
+
+            val authorized = checkAuth(headerBytes)
+
+            if (auth && !authorized) {
+                println("Unauthorized CONNECT")
+                clientOutput.write("HTTP/1.1 401 Authentication Required\r\n\r\n".toByteArray())
+                client.close()
+                return
+            }
+
+            if (remainingBytes.isNotEmpty()) {
+                println("Unexpected data after CONNECT headers")
+                client.close()
+                return
+            }
+
             val (host, port) = parseConnectTarget(path)
-            discardConnectHeaders(clientInput)
 
             connectRequest(clientInput, clientOutput, host, port, client)
             return
+
         }
 
         val (headerBytes, remainingBytes) = readAllBytes(clientInput, buffer)
+
+        val authorized = checkAuth(headerBytes)
+
+        if (auth && !authorized) {
+            println("Unauthorized")
+            clientOutput.write("HTTP/1.1 401 Unauthorized\r\n\r\n".toByteArray())
+            client.close()
+            return
+        }
 
         val data = requestLine + "\r\n" + String(headerBytes, charset = StandardCharsets.UTF_8)
         val parsedRequest = parseHeaders(data)
 
         val (host, port, newPath) = getHostPort(parsedRequest.path)
         parsedRequest.path = newPath
-
-        println(host)
-        println(port)
-        println(newPath)
-
 
 
         val targetSocket = Socket(host, port)
@@ -383,4 +412,9 @@ fun assignPathAndPort(destination: String, fallbackPort: Int): Triple<Int, Strin
         port = splitHostPort[1].toInt()
     }
     return Triple(port, newPath, host)
+}
+
+fun checkAuth(headerBytes: ByteArray): Boolean {
+    val headerString = String(headerBytes, charset = StandardCharsets.UTF_8)
+    return headerString.lineSequence().any { it.startsWith("x-auth-token:", ignoreCase = true) && it.substringAfter(":").trim() == authToken}
 }
