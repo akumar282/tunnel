@@ -114,7 +114,8 @@ fun handleConnection(client: Socket) {
             val authorized = checkAuth(headerBytes)
 
             if (auth && !authorized) {
-                println("Unauthorized CONNECT")
+                val time = Clock.System.now()
+                println("[${time}] Unauthorized CONNECT from ${client.remoteSocketAddress}")
                 clientOutput.write("HTTP/1.1 401 Authentication Required\r\n\r\n".toByteArray())
                 client.close()
                 return
@@ -138,7 +139,8 @@ fun handleConnection(client: Socket) {
         val authorized = checkAuth(headerBytes)
 
         if (auth && !authorized) {
-            println("Unauthorized")
+            val time = Clock.System.now()
+            println("[${time}] Unauthorized connection from ${client.remoteSocketAddress}")
             clientOutput.write("HTTP/1.1 401 Unauthorized\r\n\r\n".toByteArray())
             client.close()
             return
