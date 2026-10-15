@@ -4,10 +4,10 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.StringReader
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
-import java.net.UnknownHostException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ArrayBlockingQueue
 import kotlin.concurrent.atomics.AtomicBoolean
@@ -82,6 +82,10 @@ fun handleConnection(client: Socket) {
     val clientInput = client.getInputStream()
     val clientOutput = client.getOutputStream()
 
+
+
+    client.soTimeout = 15000
+
     try {
         val requestLine = readRequestLine(clientInput)
         if (requestLine.isNullOrBlank()) {
@@ -107,6 +111,7 @@ fun handleConnection(client: Socket) {
         val method = parts[0]
         val path = parts[1]
         val protocol = parts[2]
+
 
         if (method == "CONNECT") {
             val (headerBytes, remainingBytes) = readAllBytes(clientInput, buffer)
@@ -153,30 +158,32 @@ fun handleConnection(client: Socket) {
         parsedRequest.path = newPath
 
 
-        val targetSocket = Socket(host, port)
-        targetSocket.soTimeout = 15000
-        client.soTimeout = 15000
+        Socket().use { targetSocket ->
+            targetSocket.connect(InetSocketAddress(host, port), 15000)
+            targetSocket.soTimeout = 15000
 
-        val targetInput = targetSocket.getInputStream()
-        val targetOutput = targetSocket.getOutputStream()
+            val targetInput = targetSocket.getInputStream()
+            val targetOutput = targetSocket.getOutputStream()
 
-        println("${parsedRequest.method} ${host}:${port} -> HTTP/1.1 200 Request Forwarded")
+            println("${parsedRequest.method} ${host}:${port} -> HTTP/1.1 200 Request Forwarded")
 
-        val newRequestHeader = reconstructHeadersToBytes(parsedRequest)
-        targetOutput.write(newRequestHeader)
+            val newRequestHeader = reconstructHeadersToBytes(parsedRequest)
+            targetOutput.write(newRequestHeader)
 
-        if (remainingBytes.isNotEmpty()) {
-            targetOutput.write(remainingBytes)
+            if (remainingBytes.isNotEmpty()) {
+                targetOutput.write(remainingBytes)
+            }
+
+            managePipes(
+                targetInput,
+                targetOutput,
+                clientInput,
+                clientOutput,
+                client,
+                targetSocket
+            )
         }
 
-        managePipes(
-            targetInput,
-            targetOutput,
-            clientInput,
-            clientOutput,
-            client,
-            targetSocket
-        )
 
     } catch (e: Exception) {
         println("Connection error: $e")
@@ -185,24 +192,31 @@ fun handleConnection(client: Socket) {
 }
 
 fun connectRequest(input: InputStream, output: OutputStream, host: String, port: Int, socket: Socket) {
-    val targetSocket = Socket(host, port)
-    val targetInput = targetSocket.getInputStream()
-    val targetOutput = targetSocket.getOutputStream()
 
-    output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(charset = Charsets.UTF_8))
-    output.flush()
+    Socket().use { targetSocket ->
+        targetSocket.connect(InetSocketAddress(host, port), 15000)
 
-    val time = Clock.System.now()
-    println("[${time}] CONNECT ${host}:${port} ${socket.remoteSocketAddress} -> HTTP/1.1 200 Connection Established")
+        targetSocket.soTimeout = 15000
+        socket.soTimeout = 15000
 
-    managePipes(
-        targetInput,
-        targetOutput,
-        input,
-        output,
-        socket,
-        targetSocket
-    )
+        val targetInput = targetSocket.getInputStream()
+        val targetOutput = targetSocket.getOutputStream()
+
+        output.write("HTTP/1.1 200 Connection Established\r\n\r\n".toByteArray(charset = Charsets.UTF_8))
+        output.flush()
+
+        val time = Clock.System.now()
+        println("[${time}] CONNECT ${host}:${port} ${socket.remoteSocketAddress} -> HTTP/1.1 200 Connection Established")
+
+        managePipes(
+            targetInput,
+            targetOutput,
+            input,
+            output,
+            socket,
+            targetSocket
+        )
+    }
 
 }
 
